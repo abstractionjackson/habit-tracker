@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Habit Tracker</title>
+    <style>
+        body {
+            font-family: 'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
+            background-color: #1a1a1a;
+            color: white;
+        }
+
+        header {
+            text-align: center;
+            padding: 10px;
+        }
+
+        pre {
+            height: fit-content;
+            max-height: 7em;
+            overflow: auto;
+        }
+
+        section.control {
+            background-color: darkslategray;
+            padding: 1em;
+        }
+
+        .control button {
+            background-color: darkgray;
+            font-weight: bold;
+        }
+
+        .presentation table {
+            width: 100%;
+        }
+        #current-db>main,
+        #current-db>footer {
+            display: flex;
+            justify-content: space-evenly;
+            flex-wrap: wrap;
+            gap: 1em;
+        }
+    </style>
+</head>
+
+<body>
+    <header>
+        <h1>Habit Tracker</h1>
+    </header>
+    <main>
+        <section class="presentation">
+            <article id="current-db">
+                <header><h4>Current DB</h4></header>
+                <main>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Metadata</th>
+                                <th>Database (Uint8Array)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>
+                                    <pre id="metadata"></pre>
+                                </td>
+                                <td>
+                                    <pre id="database"></pre>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </main>
+            </article>
+            <article id="habits">
+                <header><h3>Habits</h3></header>
+                <main>
+                    <ul id="habits-all"></ul>
+                </main>
+                <footer>
+                    <p>
+                        <small>
+                            <i>Right-click to edit/delete</i>
+                        </small>
+                    </p>
+                </footer>
+            </article>
+        </section>
+        <section class="control">
+            <article>
+                <header><h4>Add Habit</h4></header>
+                <main><form action="" id="add-habit">
+                    <input type="text" name="habit" id="habit" placeholder="Habit">
+                    <button type="submit">Add</button>
+                </form></main>
+            </article>
+        </section>
+    </main>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"
+        integrity="sha512-+6Q7hv5pGUBXOuHWw8OdQx3ac7DzM3oJhYqz7SHDku0yl9EBdMqegoPed4GsHRoNF/VQYK2LTYewAIEBrEf/3w=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script type="module">
+        // Constants
+        const STORAGE_KEY_DB = 'db';
+        const EVENT = {
+            DB_STORE: 'DB_STORE',
+            DB_LOAD: 'DB_LOAD',
+            HABITS_CHANGE: 'HABITS_CHANGE'
+        };
+        // Function
+        const { log } = console;
+        // init sql.js
+        const SQL = await initSqlJs({
+            locateFile: (file) => {
+                return `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`;
+            }
+        });
+        // Elements
+        const initDbButton = document.getElementById('init-db');
+        const currentMetadata = document.getElementById('metadata');
+        const currentDatabase = document.getElementById('database');
+        const habitsAll = document.getElementById('habits-all');
+        const addHabitForm = document.getElementById('add-habit');
+        // Models
+        class DbData {
+            constructor(sqlDb) {
+                this.dbData = Array.from(sqlDb.export())
+                this.metadata = {
+                    created: new Date().toISOString()
+                };
+            }
+        }
+
+        // Event Listeners
+        addEventListener(EVENT.DB_LOAD, () => {
+            // update the presentation layer Current DB
+            currentMetadata.textContent = JSON.stringify(window.metadata, null, 2);
+            currentDatabase.textContent = JSON.stringify(window.db.export(), null, 2);
+            // update the habits on the windwow
+            window.habits = getHabitsAll()
+            window.dispatchEvent(new Event(EVENT.HABITS_CHANGE));
+        });
+        addEventListener(EVENT.DB_STORE, () => {
+            loadDb();
+        });
+        addEventListener(EVENT.HABITS_CHANGE, () => {
+            // update the presentation layer Habits
+            habitsAll.innerHTML = window.habits.map(habit => `<li id="habit-${habit.habit}">${habit.habit}</li>`).join('');
+        });
+        addEventListener('contextmenu', (event) => {
+            // if the event taget is a listitem with id prefix habit-
+            // prevent default
+            if (event.target.tagName === 'LI' && event.target.id.startsWith('habit-')) {
+                event.preventDefault();
+                // habit item
+                const habit = event.target;
+                const initialHabit = habit.textContent;
+                // create custom context menu
+                // container
+                const habitContextMenu = document.createElement('div');
+                // vertical flex
+                habitContextMenu.style.display = 'flex';
+                habitContextMenu.style.flexDirection = 'column';
+                // edit button
+                const editHabitButton = document.createElement('button');
+                editHabitButton.textContent = 'Edit';
+                // delete button
+                const deleteHabitButton = document.createElement('button');
+                deleteHabitButton.textContent = 'Delete';
+                deleteHabitButton.style.backgroundColor = '#eb4634';
+                // white text
+                deleteHabitButton.style.color = 'white';
+                // position  the container at the mouse
+                habitContextMenu.style.position = 'absolute';
+                habitContextMenu.style.top = `${event.clientY}px`;
+                habitContextMenu.style.left = `${event.clientX}px`;
+                // append the container to the body
+                document.body.appendChild(habitContextMenu);
+                // add the buttons to the container
+                habitContextMenu.appendChild(editHabitButton);
+                habitContextMenu.appendChild(deleteHabitButton);
+                // on click, set the habit to contenteditable, and add an "update" button below or beside, and remove the edit button
+                editHabitButton.addEventListener('click', () => {
+                    habit.contentEditable = true;
+                    // focus the habit
+                    habit.focus();
+                    editHabitButton.remove();
+                    const updateHabitButton = document.createElement('button');
+                    updateHabitButton.textContent = 'Update';
+                    habit.after(updateHabitButton);
+                    updateHabitButton.addEventListener('click', () => {
+                        habit.contentEditable = false;
+                        updateHabit(initialHabit, habit.textContent);
+                        updateHabitButton.remove();
+                    });
+                    addEventListener('keydown', (event) => {
+                        if (event.key === 'Escape') {
+                            habit.contentEditable = false;
+                            updateHabitButton.remove();
+                        }
+                    });
+                });
+                deleteHabitButton.addEventListener('click', () => {
+                    deleteHabit(initialHabit);
+                    habitContextMenu.remove();
+                });
+                addEventListener('keydown', (event) => {
+                    if (event.key === 'Escape') {
+                        habitContextMenu.remove();
+                    }
+                });
+                // click outside to remove
+                addEventListener('click', () => {
+                    habitContextMenu.remove();
+                });
+            };
+        });
+        addHabitForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            const habit = event.target.habit.value;
+            // insert the habit into the db
+            try {
+            window.db.run('INSERT INTO habits VALUES (?)', [habit]);
+        } catch (error) {
+            alert(error.message);
+        }
+        // store the db
+            storeDb();
+        });
+        
+        // Methods
+        function initDb() {
+            // create an empty database
+            const sqlDb = new SQL.Database();
+            // create tables for POC
+            createPOCTables(sqlDb);
+            // seed tables for POC
+            seedPOCTables(sqlDb);
+            // set the db object to the window object
+            setDb(sqlDb);
+            // store the db object in local storage
+            storeDb();
+        };
+        function createPOCTables(db) {
+            // create a table for habits
+            db.run('CREATE TABLE habits (habit TEXT PRIMARY KEY)');
+        };
+        function seedPOCTables(db) {
+            // insert some data
+            db.run('INSERT INTO habits VALUES (?)', ['Exercise']);
+            db.run('INSERT INTO habits VALUES (?)', ['Read']);
+            db.run('INSERT INTO habits VALUES (?)', ['Journal']);
+        };
+        function setDb(sqlDb) {
+            window.db = sqlDb;
+        };
+        function setMetadata(metadata) {
+            window.metadata = metadata;
+        };
+        function storeDb() {
+            const dbData = new DbData(window.db);
+            localStorage.setItem(
+                STORAGE_KEY_DB,
+                JSON.stringify(new DbData(window.db))
+            );
+            window.dispatchEvent(new Event(EVENT.DB_STORE));
+        };
+        function loadDb() {
+            const dbRaw = localStorage.getItem(STORAGE_KEY_DB)
+            if (!dbRaw) {
+                log("No db in storage")
+                initDb();
+            };
+            const jsonDbData = JSON.parse(dbRaw);
+            // convert the array at jsonDatabase.dbData to a Uint8Array
+            const decodedDb = new Uint8Array(jsonDbData.dbData);
+            const sqlDb = new SQL.Database(decodedDb);
+            setDb(sqlDb)
+            setMetadata(jsonDbData.metadata);
+            window.dispatchEvent(new Event(EVENT.DB_LOAD));
+        }
+        function onLoad() {
+            loadDb();
+            window.dispatchEvent(new Event(EVENT.DB_LOAD));
+        };
+        function getHabitsAll() {
+            // query the db for all habits
+            const stmt = window.db.prepare('SELECT * FROM habits');
+            const habits = [];
+            while (stmt.step()) {
+                habits.push(stmt.getAsObject());
+            }
+            return habits;
+        };
+        function updateHabit(oldHabit, newHabit) {
+            log('updateHabit', "from", oldHabit, "to", newHabit);
+            // update the habit in the db
+            window.db.run('UPDATE habits SET habit = ? WHERE habit = ?', [newHabit, oldHabit]);
+            // store the db
+            storeDb();
+        };
+        function deleteHabit(habit) {
+            log('deleteHabit', habit);
+            // delete the habit from the db
+            window.db.run('DELETE FROM habits WHERE habit = ?', [habit]);
+            // store the db
+            storeDb();
+        };
+        // Initialize
+        onLoad();
+    </script>
+</body>
+
+</html>
